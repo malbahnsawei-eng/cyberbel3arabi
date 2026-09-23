@@ -1009,10 +1009,8 @@ with tabs[1]:
       default_time = datetime.strptime(saved_time, "%H:%M").time()
     except Exception:
       default_time = datetime.strptime("10:00", "%H:%M").time()
-    daily_time = st.time_input(
-        "اختر الوقت:", value=default_time, step=300
-    )
+    daily_time = st.time_input("اختر الوقت:", value=default_time, step=300)
   with col_d:
-  period = "صباحًا ☀️" if daily_time.hour < 12 else "مساءً 🌙"
-  st.markdown(
-      f"
+    period = "صباحًا ☀️" if daily_time.hour < 12 else "مساءً 🌙"
+    st.markdown(
+        f"
