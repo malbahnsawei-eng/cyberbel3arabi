@@ -1,0 +1,9 @@
+streamlit
+requests
+beautifulsoup4
+pillow
+arabic-reshaper
+python-bidi
+groq
+selenium
+webdriver-manager
