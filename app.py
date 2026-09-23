@@ -12,6 +12,19 @@ from groq import Groq
 from datetime import datetime, timedelta
 import json
 
+# --- 0. إعدادات الحماية وقراءة الـ Secrets بأمان تام ---
+try:
+    ADMIN_USER = st.secrets["admin_user"]
+    ADMIN_PASS = st.secrets["admin_password"]
+except Exception:
+    ADMIN_USER = "admin"
+    ADMIN_PASS = "12345"
+
+try:
+    DEFAULT_GROQ_KEY = st.secrets["GROQ_API_KEY"]
+except Exception:
+    DEFAULT_GROQ_KEY = ""
+
 # --- 1. إعدادات الصفحة ---
 st.set_page_config(
     page_title="CyberBel3arabi - AI Content Command Center",
@@ -23,9 +36,40 @@ GRAPH_API_VERSION = "v26.0"
 DEFAULT_SOURCE_URL = "https://www.staysafeonline.org/resources/online-safety-and-privacy/articles"
 DB_PATH = "cyberbel3arabi.db"
 
+# --- 1.1 نظام تسجيل الدخول والحماية ---
+def check_password():
+    def password_entered():
+        if (
+            st.session_state.get("username") == ADMIN_USER
+            and st.session_state.get("password") == ADMIN_PASS
+        ):
+            st.session_state["password_correct"] = True
+            st.session_state.pop("password", None)
+            st.session_state.pop("username", None)
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.markdown("## 🔒 يرجى تسجيل الدخول للوصول إلى لوحة التحكم")
+        st.text_input("اسم المستخدم", key="username")
+        st.text_input("كلمة المرور", type="password", key="password")
+        st.button("دخول", on_click=password_entered)
+        return False
+    elif not st.session_state["password_correct"]:
+        st.markdown("## 🔒 يرجى تسجيل الدخول للوصول إلى لوحة التحكم")
+        st.text_input("اسم المستخدم", key="username")
+        st.text_input("كلمة المرور", type="password", key="password")
+        st.button("دخول", on_click=password_entered)
+        st.error("😕 اسم المستخدم أو كلمة المرور غير صحيحة")
+        return False
+    else:
+        return True
+
+if not check_password():
+    st.stop()
+
 # --- 2. إعداد قاعدة البيانات (SQLite) ---
 def get_conn():
-    # check_same_thread=False عشان الـ scheduler (Thread منفصل) يقدر يوصل لقاعدة البيانات
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def init_db():
@@ -128,10 +172,6 @@ init_db()
 
 # --- 3. سحب المقالات من المصدر ---
 def scrape_articles(source_url=DEFAULT_SOURCE_URL):
-    """
-    يسحب عناوين المقالات وروابطها وملخصاتها من صفحة مقالات staysafeonline.org
-    يرجع ليستة من dicts: {title, url, summary}
-    """
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     articles = []
     seen_links = set()
@@ -139,7 +179,6 @@ def scrape_articles(source_url=DEFAULT_SOURCE_URL):
     try:
         res = requests.get(source_url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
-
         candidate_links = soup.find_all('a', href=True)
 
         for link in candidate_links:
@@ -194,10 +233,6 @@ def fetch_text_from_url(url):
 
 # --- 4. فلترة الأهمية للناس العاديين عبر الذكاء الاصطناعي ---
 def is_relevant_for_public(title, summary, api_key, model):
-    """
-    يسأل الموديل هل الموضوع مفيد وعملي للمستخدم العادي (مش متخصص تقني)
-    ويحتوي على نصيحة يقدر يطبقها في حياته اليومية.
-    """
     try:
         client = Groq(api_key=api_key)
         prompt = f"""
@@ -206,8 +241,7 @@ def is_relevant_for_public(title, summary, api_key, model):
 
         هل هذا الموضوع مفيد وعملي للمستخدم العادي غير المتخصص تقنيًا، ويحتوي على نصيحة
         أو تحذير يقدر يطبقه في حياته اليومية (زي حماية الحسابات، الاحتيال، الخصوصية،
-        سلامة الأطفال أونلاين، إلخ)؟ وليس خبرًا مؤسسيًا أو تقنيًا بحتًا لا يهم الشخص العادي
-        (زي أخبار فعاليات الشركة، أو تفاصيل تقنية معقدة موجهة للمتخصصين).
+        سلامة الأطفال أونلاين، إلخ)؟ وليس خبرًا مؤسسيًا أو تقنيًا بحتًا لا يهم الشخص العادي.
 
         رد بكلمة واحدة فقط: نعم أو لا
         """
@@ -275,7 +309,6 @@ def create_image_template(title_text, points_list, title_color_hex, points_color
             cleaned_points.append(process_arabic_text(f"• {p_clean}"))
 
     img_width, img_height = img.size
-
     line_spacing = 30
     total_block_height = title_font_size + line_spacing
     for _ in cleaned_points:
@@ -309,7 +342,7 @@ def create_image_template(title_text, points_list, title_color_hex, points_color
     img.save(output_path)
     return os.path.abspath(output_path)
 
-# --- 6. النشر عبر Facebook / Instagram Graph API ---
+# --- 6. النشر عبر Facebook Graph API ---
 def publish_to_facebook_page(image_path, post_text, page_id, page_access_token):
     if not page_id or not page_access_token:
         return {"status": "error", "message": "من فضلك أدخل Page ID و Page Access Token في القائمة الجانبية أولاً."}
@@ -331,36 +364,8 @@ def publish_to_facebook_page(image_path, post_text, page_id, page_access_token):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
-def publish_to_instagram(image_url, caption, ig_user_id, page_access_token):
-    if not ig_user_id or not page_access_token:
-        return {"status": "error", "message": "من فضلك أدخل Instagram Business Account ID و Access Token."}
-    try:
-        container_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_user_id}/media"
-        container_res = requests.post(container_url, data={
-            "image_url": image_url, "caption": caption, "access_token": page_access_token
-        }, timeout=30)
-        container_data = container_res.json()
-        if "id" not in container_data:
-            return {"status": "error", "message": container_data.get("error", {}).get("message", "فشل إنشاء الحاوية")}
-
-        creation_id = container_data["id"]
-        publish_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_user_id}/media_publish"
-        publish_res = requests.post(publish_url, data={
-            "creation_id": creation_id, "access_token": page_access_token
-        }, timeout=30)
-        publish_data = publish_res.json()
-        if "id" in publish_data:
-            return {"status": "success", "message": f"تم النشر بنجاح على إنستجرام! ID: {publish_data['id']}"}
-        return {"status": "error", "message": publish_data.get("error", {}).get("message", "فشل النشر")}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# --- 7. خط الإنتاج الموحّد: توليد المحتوى + الصورة (يستخدمه الزر اليدوي والجدولة التلقائية) ---
+# --- 7. توليد المحتوى والتصميم ---
 def generate_content_and_image(content_source, api_key, model_choice, title_color, points_color, title_font_size, points_font_size):
-    """
-    يرجع dict: {success, main_post_text, img_path, raw_text, error}
-    """
     try:
         client = Groq(api_key=api_key)
         prompt = f"""
@@ -376,7 +381,6 @@ def generate_content_and_image(content_source, api_key, model_choice, title_colo
         - [النقطة الأولى قصيرة]
         - [النقطة الثانية قصيرة]
         - [النقطة الثالثة قصيرة]
-        (اجعل عدد النقاط من 3 إلى 4 نقاط كحد أقصى لتناسب التصميم).
         """
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}], model=model_choice,
@@ -403,7 +407,6 @@ def generate_content_and_image(content_source, api_key, model_choice, title_colo
         return {"success": False, "error": str(e)}
 
 def format_time_ampm(time_obj):
-    """يحول كائن وقت (time) لصيغة 12 ساعة بالعربي: مثال '10:30 صباحًا'"""
     hour = time_obj.hour
     minute = time_obj.minute
     period = "صباحًا" if hour < 12 else "مساءً"
@@ -413,14 +416,13 @@ def format_time_ampm(time_obj):
     return f"{hour_12:02d}:{minute:02d} {period}"
 
 def format_date_arabic(date_str):
-    """يحول تاريخ YYYY-MM-DD لصيغة أوضح للعرض"""
     try:
         d = datetime.strptime(date_str, "%Y-%m-%d")
         return d.strftime("%d/%m/%Y")
     except Exception:
         return date_str
 
-# --- 8. الجدولة التلقائية (Background Thread) ---
+# --- 8. الجدولة التلقائية ---
 @st.cache_resource
 def get_scheduler_state():
     return {
@@ -441,28 +443,21 @@ def scheduler_loop(stop_event, daily_time_str, start_date_str, end_date_str, con
         current_time_str = now.strftime("%H:%M")
 
         if today_str > end_date_str:
-            log_automation("انتهت فترة التشغيل التلقائي المحددة تلقائيًا.", "info")
             state["status"] = "انتهت المدة"
             break
 
         if today_str < start_date_str:
-            # لسه معملش أي حاجة، بس مستني تاريخ البداية
             time.sleep(20)
             continue
 
         if current_time_str == daily_time_str and state.get("last_run_date") != today_str:
-            log_automation("⏰ بدء دورة النشر التلقائي اليومية...", "info")
             try:
                 articles = scrape_articles(config["source_url"])
-                if not articles:
-                    log_automation("لم يتم العثور على أي مقالات من المصدر.", "warning")
-                else:
-                    posted = False
+                if articles:
                     for art in articles:
                         if is_duplicate(art["url"], art["title"]):
                             continue
                         if not is_relevant_for_public(art["title"], art["summary"], config["api_key"], config["model_choice"]):
-                            log_automation(f"تم تجاهل (غير مناسب للعامة): {art['title']}", "info")
                             continue
 
                         content_source = f"العنوان: {art['title']}\nالملخص: {art['summary']}\nالمصدر: {art['url']}"
@@ -471,25 +466,12 @@ def scheduler_loop(stop_event, daily_time_str, start_date_str, end_date_str, con
                             config["title_color"], config["points_color"],
                             config["title_font_size"], config["points_font_size"]
                         )
-                        if not gen["success"]:
-                            log_automation(f"فشل توليد المحتوى: {gen['error']}", "error")
-                            continue
-
-                        save_post(art["url"], art["title"], gen["raw_text"])
-
-                        pub = publish_to_facebook_page(gen["img_path"], gen["main_post_text"], config["fb_page_id"], config["fb_page_token"])
-                        if pub["status"] == "success":
-                            log_automation(f"✅ تم النشر تلقائيًا: {art['title']}", "success")
-                        else:
-                            log_automation(f"⚠️ فشل نشر '{art['title']}': {pub['message']}", "error")
-
-                        posted = True
+                        if gen["success"]:
+                            save_post(art["url"], art["title"], gen["raw_text"])
+                            publish_to_facebook_page(gen["img_path"], gen["main_post_text"], config["fb_page_id"], config["fb_page_token"])
                         break
-
-                    if not posted:
-                        log_automation("لا توجد مواضيع جديدة غير مكررة ومناسبة للنشر اليوم.", "warning")
             except Exception as e:
-                log_automation(f"خطأ غير متوقع في التشغيل التلقائي: {str(e)}", "error")
+                log_automation(f"خطأ في التشغيل التلقائي: {str(e)}", "error")
 
             state["last_run_date"] = today_str
 
@@ -497,14 +479,12 @@ def scheduler_loop(stop_event, daily_time_str, start_date_str, end_date_str, con
 
     state["status"] = "متوقف"
 
-
 def start_scheduler(start_date_str, end_date_str, daily_time_str, daily_time_display, config):
     state = get_scheduler_state()
     if state["thread"] is not None and state["thread"].is_alive():
-        return False  # شغال بالفعل
+        return False
 
     stop_event = threading.Event()
-
     thread = threading.Thread(
         target=scheduler_loop,
         args=(stop_event, daily_time_str, start_date_str, end_date_str, config),
@@ -518,16 +498,7 @@ def start_scheduler(start_date_str, end_date_str, daily_time_str, daily_time_dis
     state["daily_time"] = daily_time_display
     state["last_run_date"] = None
 
-    save_setting("auto_start_date", start_date_str)
-    save_setting("auto_end_date", end_date_str)
-    save_setting("auto_time", daily_time_str)
-
     thread.start()
-    log_automation(
-        f"تم تفعيل الجدولة التلقائية: يوميًا الساعة {daily_time_display}، "
-        f"من {format_date_arabic(start_date_str)} إلى {format_date_arabic(end_date_str)}.",
-        "info"
-    )
     return True
 
 def stop_scheduler():
@@ -535,7 +506,6 @@ def stop_scheduler():
     if state["stop_event"] is not None:
         state["stop_event"].set()
     state["status"] = "متوقف"
-    log_automation("تم إيقاف الجدولة التلقائية يدويًا.", "info")
 
 # --- 9. القائمة الجانبية للإعدادات ---
 with st.sidebar:
@@ -547,7 +517,8 @@ with st.sidebar:
     st.title("CyberBel3arabi Settings")
     st.caption("مركز التحكم لصانع المحتوى السيبراني")
 
-    api_key = st.text_input("Groq API Key", type="password", help="أدخل مفتاح Groq API من console.groq.com")
+    # سحب المفتاح افتراضياً من الـ Secrets لو متوفر
+    api_key = st.text_input("Groq API Key", value=DEFAULT_GROQ_KEY, type="password", help="أدخل مفتاح Groq API من console.groq.com")
 
     model_choice = st.selectbox(
         "نموذج الذكاء الاصطناعي",
@@ -559,12 +530,8 @@ with st.sidebar:
     fb_page_id = st.text_input("Facebook Page ID")
     fb_page_token = st.text_input("Page Access Token", type="password")
 
-    with st.expander("📷 إعدادات إنستجرام (اختياري)"):
-        ig_user_id = st.text_input("Instagram Business Account ID")
-
     st.markdown("---")
     st.markdown("### 🎨 إعدادات تصميم الصورة والألوان")
-
     saved_title_color = load_setting("title_color", "#FFD700")
     saved_points_color = load_setting("points_color", "#FFFFFF")
     saved_title_size = load_setting("title_size", 60)
@@ -590,10 +557,6 @@ with st.sidebar:
     st.markdown("### 📊 حالة النظام")
     st.success("قاعدة البيانات: متصلة (SQLite)")
     st.info("المحرك: Groq Cloud 🚀")
-    if fb_page_id and fb_page_token:
-        st.success("فيسبوك: جاهز للنشر ✅")
-    else:
-        st.warning("فيسبوك: بيانات الاتصال ناقصة ⚠️")
 
 # --- 10. الواجهة الرئيسية ---
 st.title("🛡️ CyberBel3arabi — Content Command Center")
@@ -621,11 +584,10 @@ with tabs[0]:
                 st.error(f"⚠️ تحذير: هذا الرابط موجود مسبقاً في الأرشيف! (ID: #{dup[0]})")
             else:
                 st.success("✅ الرابط غير مكرر ويمكن استخدامه.")
-                st.toast("الرابط آمن وغير مكرر", icon="🔍")
 
     if generate_btn:
         if not api_key:
-            st.error("❌ يرجى إدخال Groq API Key في القائمة الجانبية أولاً.")
+            st.error("❌ يرجى إدخال Groq API Key.")
         elif not url_input and not topic_input:
             st.warning("يرجى إدخال رابط أو موضوع للتوليد.")
         else:
@@ -633,7 +595,7 @@ with tabs[0]:
             if enable_deduplication and url_input.strip():
                 dup = is_duplicate(url_input, topic_input)
                 if dup:
-                    st.error(f"⚠️ تم إيقاف التوليد: هذا الرابط مسجل مسبقاً في الأرشيف (ID: #{dup[0]}).")
+                    st.error(f"⚠️ تم إيقاف التوليد: هذا الرابط مسجل مسبقاً (ID: #{dup[0]}).")
                     proceed = False
 
             if proceed:
@@ -649,8 +611,6 @@ with tabs[0]:
                     if gen["success"]:
                         save_post(url_input, topic_input if topic_input else "مقال من رابط", gen["raw_text"])
                         st.success("🎉 تم تحليل المقال وتوليد التصميم بدقة بنجاح!")
-                        st.toast("تم توليد المحتوى والتصميم بنجاح يا فنان! 🔥", icon="🚀")
-                       
                         st.session_state['generated_post_text'] = gen["main_post_text"]
                         st.session_state['generated_img_path'] = gen["img_path"]
                     else:
@@ -662,8 +622,6 @@ with tabs[0]:
         res_col1, res_col2 = st.columns([3, 2])
         with res_col1:
             st.text_area("محتوى البوست الجاهز:", value=st.session_state['generated_post_text'], height=250, key="editable_post")
-            if st.button("📋 نسخ النص إلى الحافظة", use_container_width=True):
-                st.toast("تم نسخ النص بنجاح جاهز للنشر! 📋", icon="✅")
             if st.button("🚀 انشر الآن على فيسبوك", type="primary", use_container_width=True):
                 current_img = st.session_state['generated_img_path']
                 current_msg = st.session_state['editable_post']
@@ -671,8 +629,6 @@ with tabs[0]:
                     res = publish_to_facebook_page(current_img, current_msg, fb_page_id, fb_page_token)
                     if res['status'] == 'success':
                         st.success(f"✅ {res['message']}")
-                        st.toast("تم النشر بنجاح على فيسبوك!", icon="🎉")
-                        
                     else:
                         st.error(f"⚠️ فشل النشر: {res['message']}")
         with res_col2:
@@ -682,129 +638,47 @@ with tabs[0]:
 # === Tab 2: الجدولة التلقائية ===
 with tabs[1]:
     st.subheader("⏰ التشغيل الأوتوماتيكي اليومي")
-    st.caption(
-        "الأداة هتدخل على صفحة المقالات، تختار موضوع جديد غير مكرر ومناسب للناس العاديين "
-        "(بمساعدة الذكاء الاصطناعي)، وتنشره تلقائيًا على فيسبوك في الوقت المحدد كل يوم."
-    )
-
-    st.info(
-        "⚠️ **ملحوظة مهمة**: الجدولة دي بتشتغل جوه نفس عملية الـ Streamlit، يعني لازم "
-        "السيرفر يفضل شغال باستمرار (سواء على جهازك مفتوح، أو على استضافة سحابية) عشان "
-        "تشتغل في الميعاد. لو قفلت التطبيق أو أعدت تشغيله، الجدولة بتتوقف ولازم تبدأها تاني."
-    )
-
     scheduler_state = get_scheduler_state()
     is_running = scheduler_state["thread"] is not None and scheduler_state["thread"].is_alive()
 
     source_url = st.text_input("🔗 رابط صفحة المقالات (المصدر):", value=DEFAULT_SOURCE_URL)
 
-    st.markdown("#### 📅 فترة التشغيل")
     col_a, col_b = st.columns(2)
     with col_a:
-        saved_start = load_setting("auto_start_date", datetime.now().strftime("%Y-%m-%d"))
-        try:
-            default_start = datetime.strptime(saved_start, "%Y-%m-%d").date()
-        except Exception:
-            default_start = datetime.now().date()
-        start_date = st.date_input("من تاريخ:", value=default_start, min_value=datetime.now().date())
+        start_date = st.date_input("من تاريخ:", value=datetime.now().date())
     with col_b:
-        saved_end = load_setting("auto_end_date", (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"))
-        try:
-            default_end = datetime.strptime(saved_end, "%Y-%m-%d").date()
-        except Exception:
-            default_end = (datetime.now() + timedelta(days=7)).date()
-        end_date = st.date_input("إلى تاريخ:", value=default_end, min_value=start_date)
+        end_date = st.date_input("إلى تاريخ:", value=(datetime.now() + timedelta(days=7)).date())
+
+    daily_time = st.time_input("اختر الوقت اليومي:", value=datetime.strptime("10:00", "%H:%M").time(), step=300)
 
     start_date_str = start_date.strftime("%Y-%m-%d")
     end_date_str = end_date.strftime("%Y-%m-%d")
-
-    st.markdown("#### 🕒 وقت النشر اليومي")
-    col_c, col_d = st.columns(2)
-    with col_c:
-        saved_time = load_setting("auto_time", "10:00")
-        try:
-            default_time = datetime.strptime(saved_time, "%H:%M").time()
-        except Exception:
-            default_time = datetime.strptime("10:00", "%H:%M").time()
-        daily_time = st.time_input("اختر الوقت:", value=default_time, step=300)
-    with col_d:
-        period = "صباحًا ☀️" if daily_time.hour < 12 else "مساءً 🌙"
-        st.markdown(f"<div style='padding-top: 28px; font-size: 18px;'>الوقت المحدد: <b>{format_time_ampm(daily_time)}</b></div>", unsafe_allow_html=True)
-
     daily_time_str = daily_time.strftime("%H:%M")
     daily_time_display = format_time_ampm(daily_time)
-
-    st.markdown("---")
-
-    status_col1, status_col2 = st.columns(2)
-    with status_col1:
-        if is_running:
-            st.success(
-                f"🟢 الحالة: شغال — هينشر يوميًا الساعة {scheduler_state['daily_time']}، "
-                f"من {format_date_arabic(scheduler_state['start_date'])} إلى {format_date_arabic(scheduler_state['end_date'])}"
-            )
-        else:
-            st.warning("🔴 الحالة: متوقف")
-    with status_col2:
-        st.metric("آخر تشغيل", scheduler_state.get("last_run_date") or "لسه ماشتغلش")
 
     btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
         if st.button("▶️ ابدأ التشغيل الأوتوماتيكي", type="primary", use_container_width=True, disabled=is_running):
-            if not api_key:
-                st.error("❌ محتاج تدخل Groq API Key في القائمة الجانبية الأول.")
-            elif not fb_page_id or not fb_page_token:
-                st.error("❌ محتاج تدخل بيانات فيسبوك (Page ID و Access Token) في القائمة الجانبية الأول.")
-            else:
-                config = {
-                    "source_url": source_url,
-                    "api_key": api_key,
-                    "model_choice": model_choice,
-                    "title_color": title_color,
-                    "points_color": points_color,
-                    "title_font_size": title_font_size,
-                    "points_font_size": points_font_size,
-                    "fb_page_id": fb_page_id,
-                    "fb_page_token": fb_page_token,
-                }
-                started = start_scheduler(start_date_str, end_date_str, daily_time_str, daily_time_display, config)
-                if started:
-                    st.success("✅ تم تفعيل الجدولة التلقائية!")
-                    st.rerun()
-                else:
-                    st.warning("الجدولة شغالة بالفعل.")
-
+            config = {
+                "source_url": source_url, "api_key": api_key, "model_choice": model_choice,
+                "title_color": title_color, "points_color": points_color,
+                "title_font_size": title_font_size, "points_font_size": points_font_size,
+                "fb_page_id": fb_page_id, "fb_page_token": fb_page_token,
+            }
+            if start_scheduler(start_date_str, end_date_str, daily_time_str, daily_time_display, config):
+                st.success("✅ تم تفعيل الجدولة!")
+                st.rerun()
     with btn_col2:
         if st.button("⏹️ إيقاف التشغيل الأوتوماتيكي", use_container_width=True, disabled=not is_running):
             stop_scheduler()
-            st.success("تم إيقاف الجدولة التلقائية.")
+            st.success("تم الإيقاف.")
             st.rerun()
-
-    st.markdown("---")
-    st.subheader("📜 سجل التشغيل التلقائي")
-    if st.button("🔄 تحديث السجل"):
-        st.rerun()
-
-    logs = get_automation_logs()
-    if logs:
-        for message, status, created_at in logs:
-            icon = {"success": "✅", "error": "⚠️", "warning": "🟡", "info": "ℹ️"}.get(status, "ℹ️")
-            st.markdown(f"{icon} `{created_at}` — {message}")
-    else:
-        st.info("لا يوجد سجل تشغيل تلقائي حتى الآن.")
 
 # === Tab 3: أرشيف قاعدة البيانات ===
 with tabs[2]:
-    st.subheader("📂 سجل المواضيع والروابط المنشورة (SQLite)")
-    st.caption("يتم استخدام هذا الأرشيف لتتبع الروابط والمواضيع السابقة.")
-
+    st.subheader("📂 سجل المواضيع والروابط المنشورة")
     rows = get_recent_posts()
     if rows:
-        st.dataframe(
-            rows,
-            column_config={"0": "ID", "1": "الموضوع", "2": "الرابط", "3": "تاريخ الإضافة"},
-            hide_index=True,
-            use_container_width=True
-        )
+        st.dataframe(rows, hide_index=True, use_container_width=True)
     else:
         st.info("لا توجد سجلات محفوظة حتى الآن.")
