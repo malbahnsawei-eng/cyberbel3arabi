@@ -1013,6 +1013,6 @@ with tabs[1]:
         "اختر الوقت:", value=default_time, step=300
     )
   with col_d:
-    period = "صباحًا ☀️" if daily_time.hour < 12 else "مساءً 🌙"
-    st.markdown(
-        "
+  period = "صباحًا ☀️" if daily_time.hour < 12 else "مساءً 🌙"
+  st.markdown(
+      f"
