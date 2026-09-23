@@ -248,8 +248,8 @@ def hex_to_rgb(hex_code):
 
 def create_image_template(title_text, points_list, title_color_hex, points_color_hex, title_font_size, points_font_size):
     os.makedirs("output", exist_ok=True)
-    template_path = "assets/template.png"
-    font_path = "assets/Cairo-Bold.ttf"
+    template_path = "template.png"
+    font_path = "Cairo-Bold.ttf"
 
     if os.path.exists(template_path):
         img = Image.open(template_path)
